@@ -58,3 +58,62 @@ venn_data <- list(DEGs = deg_rat, GR = gr_rat, PR = pr_rat)
 ggvenn(venn_data, fill_color = c("skyblue", "salmon", "lightgreen"))
 
 gr_fisher <- fisher.test(gr_table)
+
+
+#write out overlaps
+# Extract individual sets
+deg_set <- venn_data$DEGs
+gr_set  <- venn_data$GR
+pr_set  <- venn_data$PR
+
+# Pairwise overlaps
+deg_gr_overlap <- intersect(deg_set, gr_set)
+deg_pr_overlap <- intersect(deg_set, pr_set)
+gr_pr_overlap  <- intersect(gr_set, pr_set)
+
+# Triple overlap
+deg_gr_pr_overlap <- Reduce(intersect, list(deg_set, gr_set, pr_set))
+
+# Optional: write to file
+writeLines(deg_gr_overlap, "DEG_GR_overlap.txt")
+writeLines(deg_pr_overlap, "DEG_PR_overlap.txt")
+writeLines(gr_pr_overlap,  "GR_PR_overlap.txt")
+writeLines(deg_gr_pr_overlap, "DEG_GR_PR_overlap.txt")
+
+
+#csv output of overlaps
+# Define your sets
+venn_data <- list(DEGs = deg_rat, GR = gr_rat, PR = pr_rat)
+
+# Get all unique genes across sets
+all_genes <- unique(unlist(venn_data))
+
+# Create a membership matrix
+membership <- sapply(venn_data, function(set) all_genes %in% set)
+rownames(membership) <- all_genes
+
+# Convert to data frame
+membership_df <- as.data.frame(membership)
+
+# Add a column for overlap type
+membership_df$Overlap <- apply(membership_df, 1, function(row) {
+  present <- names(venn_data)[which(row)]
+  if (length(present) == 1) {
+    return(paste0("Exclusive to ", present))
+  } else {
+    return(paste(present, collapse = " & "))
+  }
+})
+
+# Filter exclusive-only overlaps
+exclusive_df <- subset(membership_df, Overlap %in% paste0("Exclusive to ", names(venn_data)))
+
+# Write to CSV
+write.csv(exclusive_df, "FAC_vs_FRC_exclusive_overlaps.csv", row.names = TRUE)
+
+# Define filename
+filename <- "FAC_vs_FRC_exclusive_overlaps.csv"
+
+# Save file and print full path
+write.csv(exclusive_df, file = filename, row.names = TRUE)
+cat("File saved to:", normalizePath(filename), "\n")
