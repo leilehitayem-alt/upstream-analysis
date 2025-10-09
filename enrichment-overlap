@@ -1,0 +1,60 @@
+#R script that:
+#Loads a DEG list (deg_rat)
+#Imports GR and PR target lists from TFLink CSVs
+#Runs Fisher’s exact test to check enrichment of DEGs against GR/PR targets
+#Prints enrichment p‑values
+#Visualizes overlaps with a Venn diagram using ggvenn
+
+# Load required libraries
+library(dplyr)
+
+#differentially expressed genes (up/down regulated gene list) can be written out like below or use [name] <- read.csv{pathway}
+deg_rat <- c(
+  "Fmn2","NA","Tmem222","Cd34","Sec61b","Epb41l4a","Mfsd6","Mmaa","Gcc1",
+  "Sun2","Mrpl27","Nt5c1a","Sorcs3","Mrps34","Bag2","Nup188","Rab33b","Lrp1b","Tmed4",
+  "Zbtb8os","Cdkn1b","Lifr","B2m","Apoc1","Cd44","Atp5f1e","Hspb1","Epha5","Panx1",
+  "Dynll1","Edf1","Pdha2","Spred1","Lrrc4","Rbx1","Snx15","Eif2d","Cog3","Itga7",
+  "Sprr1a","Gar1","Akap7","Cox17","Slc25a14"
+  
+)
+
+# Step 2: Load GR and PR target gene lists from TFLink (rat-specific)
+# Make sure these files are downloaded from TFLink and contain a column with gene symbols [coumn name has to be exactly target_gene]
+pr_rat <- read.csv("C:/Users/leile/Documents/PGR_rat_targets.csv", header = TRUE, stringsAsFactors = FALSE)$target_gene
+gr_rat <- read.csv("C:/Users/leile/Documents/NR3C1_rat_targets.csv", header = TRUE, stringsAsFactors = FALSE)$target_gene
+
+# Step 3: Perform Fisher's Exact Test for GR
+gr_overlap <- intersect(deg_rat, gr_rat)
+gr_table <- matrix(c(length(gr_overlap),
+                     length(deg_rat) - length(gr_overlap),
+                     length(gr_rat) - length(gr_overlap),
+                     20000 - length(deg_rat) - length(gr_rat) + length(gr_overlap)),
+                   nrow = 2)
+gr_fisher <- fisher.test(gr_table)
+
+# Step 4: Perform Fisher's Exact Test for PR
+pr_overlap <- intersect(deg_rat, pr_rat)
+pr_table <- matrix(c(length(pr_overlap),
+                     length(deg_rat) - length(pr_overlap),
+                     length(pr_rat) - length(pr_overlap),
+                     20000 - length(deg_rat) - length(pr_rat) + length(pr_overlap)),
+                   nrow = 2)
+pr_fisher <- fisher.test(pr_table)
+
+# Step 5: Print enrichment results
+cat("GR (NR3C1) enrichment p-value:", gr_fisher$p.value, "\n")
+cat("PR (PGR) enrichment p-value:", pr_fisher$p.value, "\n")
+
+# Step 6: Visualize overlaps with Venn diagram
+
+# Install and load ggvenn
+# install.packages("ggvenn")   # skip if already installed
+library(ggvenn)
+
+# Build named list and plot [can change colors if want]
+venn_data <- list(DEGs = deg_rat, GR = gr_rat, PR = pr_rat)
+ggvenn(venn_data, fill_color = c("skyblue", "salmon", "lightgreen"))
+venn_data <- list(DEGs = deg_rat, GR = gr_rat, PR = pr_rat)
+ggvenn(venn_data, fill_color = c("skyblue", "salmon", "lightgreen"))
+
+gr_fisher <- fisher.test(gr_table)
