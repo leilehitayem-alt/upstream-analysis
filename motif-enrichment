@@ -1,0 +1,217 @@
+#############################
+# Setup and inputs
+#############################
+suppressPackageStartupMessages({
+  library(JASPAR2022)
+  library(TFBSTools)
+  library(motifmatchr)
+  library(BSgenome.Rnorvegicus.UCSC.rn6)
+  library(TxDb.Rnorvegicus.UCSC.rn6.refGene)
+  library(GenomicFeatures)
+  library(Biostrings)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(dplyr)
+  library(org.Rn.eg.db)   # for symbol ↔ Entrez mapping
+  library(SummarizedExperiment) # for assay()
+})
+
+# Paths to your input files (tab-delimited with column 'Target_genes')
+pr_file <- "C:/Users/leile/Downloads/Pgr.1.tsv"
+gr_file <- "C:/Users/leile/Downloads/Nr3c1.1.tsv"
+
+
+#############################
+# Load target lists
+#############################
+pr_targets <- read.delim("C:/Users/leile/Downloads/Pgr.1.tsv", header=TRUE , stringsAsFactors = FALSE)
+gr_targets <- read.delim("C:/Users/leile/Downloads/Nr3c1.1.tsv", header=TRUE , stringsAsFactors = FALSE)
+
+stopifnot("Target_genes" %in% colnames(pr_targets))
+stopifnot("Target_genes" %in% colnames(gr_targets))
+
+pr_genes <- unique(trimws(as.character(pr_targets$Target_genes)))
+gr_genes <- unique(trimws(as.character(gr_targets$Target_genes)))
+
+#############################
+# Map gene symbols → Entrez IDs
+#############################
+pr_entrez <- mapIds(org.Rn.eg.db, keys = pr_genes,
+                    column = "ENTREZID", keytype = "SYMBOL",
+                    multiVals = "first") |> na.omit()
+gr_entrez <- mapIds(org.Rn.eg.db, keys = gr_genes,
+                    column = "ENTREZID", keytype = "SYMBOL",
+                    multiVals = "first") |> na.omit()
+
+#############################
+# Gene models and promoters
+#############################
+txdb <- TxDb.Rnorvegicus.UCSC.rn6.refGene
+all_genes <- genes(txdb)
+canon_chrs <- paste0("chr", c(1:20, "X", "Y"))
+all_genes <- keepSeqlevels(all_genes, canon_chrs, pruning.mode = "coarse")
+
+pr_coords <- all_genes[names(all_genes) %in% pr_entrez]
+gr_coords <- all_genes[names(all_genes) %in% gr_entrez]
+
+prom_up <- 1000; prom_down <- 200
+promoters_pr <- trim(promoters(pr_coords, upstream = prom_up, downstream = prom_down))
+promoters_gr <- trim(promoters(gr_coords, upstream = prom_up, downstream = prom_down))
+
+bg_promoters_all <- trim(promoters(all_genes, upstream = prom_up, downstream = prom_down))
+bg_promoters_pr <- bg_promoters_all[!names(bg_promoters_all) %in% pr_entrez]
+bg_promoters_gr <- bg_promoters_all[!names(bg_promoters_all) %in% gr_entrez]
+
+#############################
+# Retrieve PR/GR motifs (base ID, latest version)
+#############################
+get_latest_motif <- function(base_id) {
+  mats <- getMatrixSet(JASPAR2022, opts = list(ID = base_id, all_versions = TRUE))
+  if (length(mats) == 0) stop(paste("No motif found for", base_id))
+  mats[[length(mats)]]
+}
+
+pr_motif <- get_latest_motif("MA0112")  # PGR
+gr_motif <- get_latest_motif("MA0113")  # NR3C1
+
+pr_motifs <- PFMatrixList(pr_motif)
+gr_motifs <- PFMatrixList(gr_motif)
+
+
+#############################
+# Match motifs
+#############################
+bsgenome <- BSgenome.Rnorvegicus.UCSC.rn6
+
+matches_pr_target <- matchMotifs(pr_motifs, promoters_pr, genome = bsgenome)
+matches_pr_bg     <- matchMotifs(pr_motifs, bg_promoters_pr, genome = bsgenome)
+matches_gr_target <- matchMotifs(gr_motifs, promoters_gr, genome = bsgenome)
+matches_gr_bg     <- matchMotifs(gr_motifs, bg_promoters_gr, genome = bsgenome)
+
+#############################
+# Fisher’s exact test per motif
+#############################
+fisher_enrich <- function(matches_target, matches_bg) {
+  mat_t <- SummarizedExperiment::assay(matches_target)
+  mat_b <- SummarizedExperiment::assay(matches_bg)
+  
+  results <- lapply(seq_len(ncol(mat_t)), function(i) {
+    hits_t <- sum(mat_t[, i]); misses_t <- nrow(mat_t) - hits_t
+    hits_b <- sum(mat_b[, i]); misses_b <- nrow(mat_b) - hits_b
+    
+    ft <- fisher.test(matrix(c(hits_t, misses_t, hits_b, misses_b), nrow = 2))
+    or <- if (length(ft$estimate) == 0) NA_real_ else unname(ft$estimate)
+    motif_id <- if (!is.null(colnames(mat_t)) && length(colnames(mat_t)) >= i) {
+      colnames(mat_t)[i]
+    } else {
+      paste0("motif_", i)
+    }
+    
+    data.frame(
+      motif_id = motif_id,
+      odds_ratio = or,
+      p_value = ft$p.value,
+      hits_target = hits_t,
+      hits_background = hits_b,
+      total_target = nrow(mat_t),
+      total_background = nrow(mat_b),
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  dplyr::bind_rows(results) %>%
+    dplyr::mutate(p_adj_BH = p.adjust(p_value, method = "BH"),
+                  neglog10_p = -log10(p_value))
+}
+
+res_pr <- fisher_enrich(matches_pr_target, matches_pr_bg)
+res_gr <- fisher_enrich(matches_gr_target, matches_gr_bg)
+
+#############################
+# Normalize motif IDs (strip version suffix)
+#############################
+res_pr <- res_pr %>%
+  mutate(motif_id_base = sub("\\..*$", "", motif_id))
+res_gr <- res_gr %>%
+  mutate(motif_id_base = sub("\\..*$", "", motif_id))
+
+#############################
+# Annotate motif names with ID + TF name
+#############################
+motif_names_df <- function(motif_list) {
+  data.frame(
+    motif_id_base = sapply(motif_list, ID),   # base JASPAR ID (e.g. MA0112)
+    motif_name    = sapply(motif_list, name), # TF symbol (e.g. PGR)
+    label         = sapply(motif_list, function(m) paste0(name(m), " (", ID(m), ")")),
+    stringsAsFactors = FALSE
+  )
+}
+
+annot_pr <- motif_names_df(pr_motifs)
+annot_gr <- motif_names_df(gr_motifs)
+
+res_pr <- res_pr %>% left_join(annot_pr, by = "motif_id_base")
+res_gr <- res_gr %>% left_join(annot_gr, by = "motif_id_base")
+
+#############################
+# Reorder columns for clean TSVs
+#############################
+res_pr_out <- res_pr %>%
+  arrange(p_value) %>%
+  select(label, motif_id, motif_id_base, motif_name,
+         odds_ratio, p_value, p_adj_BH,
+         hits_target, hits_background,
+         total_target, total_background)
+
+res_gr_out <- res_gr %>%
+  arrange(p_value) %>%
+  select(label, motif_id, motif_id_base, motif_name,
+         odds_ratio, p_value, p_adj_BH,
+         hits_target, hits_background,
+         total_target, total_background)
+
+write.table(res_pr_out, "PR_motif_enrichment.tsv", sep="\t", quote=FALSE, row.names=FALSE)
+write.table(res_gr_out, "GR_motif_enrichment.tsv", sep="\t", quote=FALSE, row.names=FALSE)
+
+#############################
+# Plotting function (recompute -log10(p))
+#############################
+plot_top <- function(df, title) {
+  top <- df %>% arrange(p_value) %>% head(10) %>%
+    mutate(neglog10_p = -log10(p_value))
+  
+  ggplot(top, aes(x = reorder(label, neglog10_p), y = neglog10_p)) +
+    geom_bar(stat = "identity", fill = "#4C72B0") +
+    coord_flip() +
+    labs(title = title, x = "Motif (TF + JASPAR ID)", y = "-log10(p-value)") +
+    theme_minimal(base_size = 12)
+}
+
+ggsave("PR_motif_enrichment_top10.png",
+       plot_top(res_pr_out, "PR motif enrichment"),
+       width=7, height=5, dpi=300)
+
+ggsave("GR_motif_enrichment_top10.png",
+       plot_top(res_gr_out, "GR motif enrichment"),
+       width=7, height=5, dpi=300)
+
+#############################
+# Console preview
+#############################
+cat("\nTop PR motifs (preview):\n")
+print(res_pr_out %>%
+        select(label, odds_ratio, p_value, p_adj_BH,
+               hits_target, hits_background) %>%
+        head(5))
+
+cat("\nTop GR motifs (preview):\n")
+print(res_gr_out %>%
+        select(label, odds_ratio, p_value, p_adj_BH,
+               hits_target, hits_background) %>%
+        head(5))
+
+cat("\nDone. Results written to PR_motif_enrichment.tsv, GR_motif_enrichment.tsv, and PNG plots.\n")
+
+
+colnames(SummarizedExperiment::assay(matches_pr_target))
+colnames(SummarizedExperiment::assay(matches_gr_target))
