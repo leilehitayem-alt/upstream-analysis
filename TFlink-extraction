@@ -1,0 +1,55 @@
+# ================================
+# TFLink Rat GR/PR Target Extractor
+# ================================
+
+# Load dplyr for filtering
+# install.packages("dplyr") # run once if not installed
+library(dplyr)
+
+# ---- Step 1. Download rat-specific TFLink dataset ----
+url_rat <- "https://cdn.netbiol.org/tflink/download_files/TFLink_Rattus_norvegicus_interactions_All_simpleFormat_v1.0.tsv"
+destfile <- "TFLink_Rattus_norvegicus_interactions_All_simpleFormat_v1.0.tsv"
+
+if (!file.exists(destfile)) {
+  download.file(url_rat, destfile, mode = "wb")
+}
+
+# ---- Step 2. Read the dataset ----
+tf_rat <- read.delim(destfile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Inspect column names to confirm structure
+# colnames(tf_rat)
+colnames(tf_rat)
+head(tf_rat, 3)
+
+# ---- Step 3. Filter for GR (Nr3c1) and PR (Pgr) ----
+# GR (Nr3c1) targets
+tflink_gr_rat <- tf_rat %>%
+  filter(Name.TF == "Nr3c1") %>%
+  pull(Name.Target) %>%
+  unique()
+
+# PR (Pgr) targets
+tflink_pr_rat <- tf_rat %>%
+  filter(Name.TF == "Pgr") %>%
+  pull(Name.Target) %>%
+  unique()
+
+# Check results
+cat("Number of GR targets (rat):", length(tflink_gr_rat), "\n")
+cat("Number of PR targets (rat):", length(tflink_pr_rat), "\n")
+
+head(tflink_gr_rat)
+head(tflink_pr_rat)
+
+# ---- Step 4. Save or print results ----
+cat("Number of GR targets (rat):", length(tflink_gr_rat), "\n")
+cat("Number of PR targets (rat):", length(tflink_pr_rat), "\n")
+
+# Optionally save for reuse
+saveRDS(tflink_gr_rat, "tflink_gr_rat.rds")
+saveRDS(tflink_pr_rat, "tflink_pr_rat.rds")
+
+# Now you can load them directly in your enrichment pipeline:
+# gr_targets <- readRDS("tflink_gr_rat.rds")
+# pr_targets <- readRDS("tflink_pr_rat.rds")
